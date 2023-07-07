@@ -4,6 +4,8 @@ import { MongoClient } from "mongodb";
 import { chromium, Browser as PlayBrowser } from "playwright";
 import puppeteer, { Browser } from "puppeteer-core";
 import { raise } from "./utils";
+import request from "request";
+import { load } from "cheerio";
 
 async function getLogsData() {
   const uri = process.env.DATABASE_URL || raise("DATABASE_URL not found");
@@ -25,7 +27,9 @@ async function runP() {
 
   let browser: PlayBrowser | undefined = undefined;
   try {
-    browser = await chromium.connectOverCDP(`wss://${auth}@brd.superproxy.io:9222`);
+    browser = await chromium.connectOverCDP(
+      `wss://${auth}@brd.superproxy.io:9222`
+    );
     console.log("Connected to browser");
 
     const page = await browser.newPage();
@@ -210,30 +214,37 @@ const euList = [
 ];
 
 const ips = [
-  ...list,
-  //...euList
+  // ...list,
+  ...euList,
 ];
 
 async function getProxy() {
   const ip = ips[Math.floor(Math.random() * ips.length)];
 
-  return `https://${ip}`;
+  return `http://${ip}`;
 }
 
 async function testWithProxies() {
-  const proxy = await getProxy();
-
+  const proxy = await getWorkingProxy();
   console.log("Using proxy", proxy);
+
+  const options = {
+    url: "http://lumtest.com/myip.json",
+    method: "GET",
+    proxy: proxy,
+  };
 
   const browser = await chromium.launch({
     headless: false,
-    proxy: { server: proxy },
+    proxy: {
+      server: proxy,
+    },
   });
 
   const page = await browser.newPage();
-  page.setDefaultNavigationTimeout(2 * 60 * 1000);
+  // page.setDefaultNavigationTimeout(2 * 60 * 1000);
 
-  await page.pause();
+  // await page.pause();
 
   await page.goto("http://lumtest.com/myip.json");
 
@@ -244,16 +255,51 @@ async function testWithProxies() {
   await browser.close();
 }
 
+async function getWorkingProxy() {
+  while (true) {
+    const proxy = await getProxy();
+
+    console.log(`Testing proxy ... ${proxy}`);
+
+    const isWorking = await fetchProxy(proxy, 1000)
+      .then(() => true)
+      .catch(() => false);
+
+    if (isWorking) return proxy;
+  }
+}
+
+function fetchProxy(proxy: string, timeout: number) {
+  return new Promise<void>((resolve, reject) => {
+    const options = {
+      url: "http://lumtest.com/myip.json",
+      method: "GET",
+      proxy: proxy,
+    };
+    const timer = setTimeout(() => {
+      reject(new Error("Request timed out"));
+    }, timeout);
+    request(options, function (error, response, html) {
+      clearTimeout(timer);
+      if (!error && response.statusCode == 200) {
+        resolve();
+      } else {
+        reject(new Error("Request failed"));
+      }
+    });
+  });
+}
+
 async function main() {
   await testWithProxies();
 }
 
-main()
-  .then(() => {
-    console.log("Done");
-    process.exit(0);
-  })
-  .catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
+main();
+// .then(() => {
+//   console.log("Done");
+//   process.exit(0);
+// })
+// .catch(error => {
+//   console.error(error);
+//   process.exit(1);
+// });
